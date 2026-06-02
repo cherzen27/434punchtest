@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>企業智能打卡系統</title>
+  
+  <!-- 載入 React, ReactDOM 和 Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- 載入 Tailwind CSS 用於排版 -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- 載入 FontAwesome 圖示庫 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <style>
+    body {
+      background-color: #f3f4f6;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // ==========================================
+    // ⚠️ 已經為您綁定好正式的 Google Apps Script URL
+    // ==========================================
+    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby6zmXp1KIUwdUP0IWn5AfV6n-mwmOjwBXDWVZapX3pYfWShDmdV2OA8rKotUD9y9RZCA/exec"; 
+
+    function App() {
+      const [currentTime, setCurrentTime] = useState(new Date());
+      const [employeeName, setEmployeeName] = useState('');
+      const [localLogs, setLocalLogs] = useState([]);
+      const [notification, setNotification] = useState({ show: false, message: '', type: 'success' });
+      const [isSending, setIsSending] = useState(false);
+
+      // 1. 初始化：讀取本地儲存的姓名和歷史記錄
+      useEffect(() => {
+        const savedName = localStorage.getItem('punch_employee_name');
+        if (savedName) setEmployeeName(savedName);
+
+        const savedLogs = localStorage.getItem('punch_local_logs');
+        if (savedLogs) setLocalLogs(JSON.parse(savedLogs));
+
+        // 時鐘計時器
+        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+        return () => clearInterval(timer);
+      }, []);
+
+      // 顯示通知提示
+      const showNotification = (message, type = 'success') => {
+        setNotification({ show: true, message, type });
+        setTimeout(() => setNotification({ show: false, message: '', type: 'success' }), 3000);
+      };
+
+      // 儲存姓名到手機
+      const handleNameChange = (e) => {
+        const name = e.target.value;
+        setEmployeeName(name);
+        localStorage.setItem('punch_employee_name', name.trim());
+      };
+
+      // 執行打卡動作
+      const handlePunch = async (actionType) => {
+        const name = employeeName.trim();
+        if (!name) {
+          showNotification("請先輸入您的姓名！", "error");
+          return;
+        }
+
+        setIsSending(true);
+        const actionText = actionType === 'IN' ? '上班' : '下班';
+        const timestamp = Date.now();
+        
+        // 紀錄保存在本地 (僅顯示在該員工手機上)
+        const newLog = { 
+          id: timestamp, 
+          name, 
+          action: actionType, 
+          time: new Date().toLocaleTimeString('zh-TW', { hour12: false }) 
+        };
+        const updatedLogs = [newLog, ...localLogs].slice(0, 10); // 只保留最近10筆在手機
+        setLocalLogs(updatedLogs);
+        localStorage.setItem('punch_local_logs', JSON.stringify(updatedLogs));
+
+        // 嘗試發送到 Google Sheet
+        if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL === "") {
+          setIsSending(false);
+          showNotification(`⚠️ ${actionText}成功 (僅存本地，尚未綁定 Google Sheet)`, "error");
+          return;
+        }
+
+        try {
+          await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            mode: 'no-cors', // 重要：避免跨域阻擋
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: name,
+              action: actionType,
+              timestamp: timestamp
+            })
+          });
+          
+          showNotification(`✅ ${actionText}打卡成功！已同步至公司報表`);
+        } catch (error) {
+          console.error("發送失敗:", error);
+          showNotification("網路異常，資料未能上傳", "error");
+        } finally {
+          setIsSending(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen pb-10 md:pt-10 flex justify-center">
+          
+          {/* 通知彈窗 */}
+          {notification.show && (
+            <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 z-50 px-6 py-3 rounded-full shadow-lg flex items-center space-x-2 transition-all w-[90%] max-w-sm justify-center ${
+              notification.type === 'error' ? 'bg-red-500 text-white' : 'bg-green-500 text-white'
+            }`}>
+              <i className={`fa-solid ${notification.type === 'error' ? 'fa-triangle-exclamation' : 'fa-circle-check'}`}></i>
+              <span className="font-medium text-sm text-center">{notification.message}</span>
+            </div>
+          )}
+
+          <div className="w-full max-w-md bg-white md:rounded-2xl md:shadow-xl overflow-hidden min-h-screen md:min-h-[700px] flex flex-col">
+            
+            {/* 標題列 */}
+            <div className="bg-blue-600 text-white p-6 text-center shadow-md">
+              <h1 className="text-2xl font-bold tracking-wider">員工打卡系統</h1>
+              <p className="text-blue-100 text-sm mt-1">Daily Punch-in</p>
+            </div>
+
+            <div className="flex-1 p-6 flex flex-col items-center space-y-8">
+              
+              {/* 時鐘顯示 */}
+              <div className="text-center bg-gray-50 w-full py-6 rounded-2xl border border-gray-100 shadow-sm">
+                <div className="text-5xl font-black text-gray-800 tracking-tight font-mono">
+                  {currentTime.toLocaleTimeString('zh-TW', { hour12: false })}
+                </div>
+                <div className="text-gray-500 mt-2 font-medium">
+                  {currentTime.toLocaleDateString('zh-TW', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                </div>
+              </div>
+
+              {/* 姓名輸入 */}
+              <div className="w-full">
+                <label className="block text-sm font-semibold text-gray-600 mb-2">員工姓名 (系統會自動記憶)</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <i className="fa-solid fa-user text-gray-400"></i>
+                  </div>
+                  <input 
+                    type="text" 
+                    value={employeeName}
+                    onChange={handleNameChange}
+                    placeholder="請輸入您的真實姓名"
+                    className="w-full pl-12 pr-4 py-4 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none font-medium text-lg transition-all"
+                  />
+                </div>
+              </div>
+
+              {/* 打卡按鈕 */}
+              <div className="flex w-full space-x-4">
+                <button 
+                  onClick={() => handlePunch('IN')}
+                  disabled={isSending}
+                  className="flex-1 bg-gradient-to-br from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white py-5 rounded-2xl shadow-lg flex flex-col items-center justify-center space-y-2 active:scale-95 disabled:opacity-50 transition-all"
+                >
+                  <i className="fa-solid fa-right-to-bracket text-2xl"></i>
+                  <span className="font-bold text-lg">上班打卡</span>
+                </button>
+                
+                <button 
+                  onClick={() => handlePunch('OUT')}
+                  disabled={isSending}
+                  className="flex-1 bg-gradient-to-br from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white py-5 rounded-2xl shadow-lg flex flex-col items-center justify-center space-y-2 active:scale-95 disabled:opacity-50 transition-all"
+                >
+                  <i className="fa-solid fa-person-running text-2xl"></i>
+                  <span className="font-bold text-lg">下班打卡</span>
+                </button>
+              </div>
+
+              {/* 個人近期紀錄 (本地端) */}
+              <div className="w-full flex-1">
+                <h3 className="text-sm font-bold text-gray-500 mb-3 border-b pb-2">我今天的打卡紀錄 (手機端)</h3>
+                <div className="space-y-3">
+                  {localLogs.length > 0 ? localLogs.slice(0, 4).map((log, index) => (
+                    <div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg border border-gray-100">
+                      <div className="flex items-center space-x-3">
+                        <i className={`fa-solid ${log.action === 'IN' ? 'fa-arrow-right text-green-500' : 'fa-arrow-left text-orange-500'}`}></i>
+                        <span className="text-gray-700 font-medium">{log.time}</span>
+                      </div>
+                      <span className={`text-xs font-bold px-2 py-1 rounded ${log.action === 'IN' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                        {log.action === 'IN' ? '上班' : '下班'}
+                      </span>
+                    </div>
+                  )) : (
+                    <p className="text-sm text-gray-400 text-center py-4">今天尚未打卡</p>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
